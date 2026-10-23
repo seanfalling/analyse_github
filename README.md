@@ -37,6 +37,7 @@ analyse-github openai/whisper -o report.md        # 写入 Markdown
 analyse-github openai/whisper -o report.html      # 写入 HTML（按扩展名自动识别）
 analyse-github openai/whisper --format html        # 直接输出 HTML 到终端
 analyse-github --compare openai/whisper openai/gpt-2        # 对比两个仓库
+analyse-github --compare A B C                                # 横向对比 3+ 个仓库
 analyse-github --compare A B -o compare.html                  # 对比并输出 HTML
 analyse-github openai/whisper --json              # 输出原始 JSON
 ```
@@ -62,7 +63,7 @@ analyse-github owner/repo
 对指定仓库自动生成分析报告，无需本地环境。
 
 ### 手动触发
-在仓库 **Actions → "Analyse GitHub repository" → Run workflow**，填目标仓库即可，报告作为 Artifact 下载并展示在 Summary 里。
+在仓库 **Actions → "Analyse GitHub repository" → Run workflow**，填目标仓库即可，报告以 Markdown + HTML 两种格式作为 Artifact 下载，Markdown 同时展示在 Summary 里。
 
 ### 定时触发
 1. Fork 本仓库

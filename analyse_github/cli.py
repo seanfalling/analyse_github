@@ -2,7 +2,7 @@
 
 用法：
     analyse-github <owner/repo 或 URL> [-o FILE] [--format md|html] [--token TOKEN] [--json]
-    analyse-github --compare <A> <B> [-o FILE] [--format md|html]
+    analyse-github --compare <A> <B> [<C> ...] [-o FILE] [--format md|html]
 """
 
 from __future__ import annotations
@@ -248,34 +248,38 @@ def render_markdown(m):
     ])
 
 
-def render_markdown_compare(m1, m2):
+def _compare_rows(ms):
+    def health(m):
+        return m["health"] if m["health"] is not None else "-"
+
+    specs = [
+        ("维护状态", lambda m: m["status"]),
+        ("Star", lambda m: m["stars"]),
+        ("Fork", lambda m: m["forks"]),
+        ("主语言", lambda m: m["language"]),
+        ("License", lambda m: m["license"]),
+        ("最近推送", lambda m: m["pushed"]),
+        ("贡献者", lambda m: m["contributors"]),
+        ("Releases", lambda m: m["releases"]),
+        ("社区健康分", health),
+    ]
+    return [(label, [fn(m) for m in ms]) for label, fn in specs]
+
+
+def render_markdown_compare(ms):
+    title = " vs ".join(m["full"] for m in ms)
     lines = [
-        f"# {m1['full']} vs {m2['full']} 对比报告", "",
+        f"# {title} 对比报告", "",
         "## 对比总览", "",
-        f"| 指标 | {m1['full']} | {m2['full']} |",
-        "| --- | --- | --- |",
+        "| 指标 | " + " | ".join(m["full"] for m in ms) + " |",
+        "| --- | " + " | ".join("---" for _ in ms) + " |",
     ]
-    cmp_rows = [
-        ("维护状态", m1["status"], m2["status"]),
-        ("Star", m1["stars"], m2["stars"]),
-        ("Fork", m1["forks"], m2["forks"]),
-        ("主语言", m1["language"], m2["language"]),
-        ("License", m1["license"], m2["license"]),
-        ("最近推送", m1["pushed"], m2["pushed"]),
-        ("贡献者", m1["contributors"], m2["contributors"]),
-        ("Releases", m1["releases"], m2["releases"]),
-        ("社区健康分", m1["health"] if m1["health"] is not None else "-",
-         m2["health"] if m2["health"] is not None else "-"),
-    ]
-    for label, a, b in cmp_rows:
-        lines.append(f"| {label} | {a} | {b} |")
-    lines += [
-        "", "## 详细报告", "",
-        f"### {m1['full']}", "", _sections_md(m1), "",
-        f"### {m2['full']}", "", _sections_md(m2), "",
-        "---", "",
-        _FOOTER_MD,
-    ]
+    for label, vals in _compare_rows(ms):
+        lines.append("| " + label + " | " + " | ".join(str(v) for v in vals) + " |")
+    lines += ["", "## 详细报告", ""]
+    for m in ms:
+        lines += [f"### {m['full']}", "", _sections_md(m), ""]
+    lines += ["---", "", _FOOTER_MD]
     return "\n".join(lines)
 
 
@@ -360,35 +364,24 @@ def render_html(m):
     return _html_page(f"{m['full']} 分析报告", body)
 
 
-def render_html_compare(m1, m2):
-    cmp_rows = [
-        ("维护状态", m1["status"], m2["status"]),
-        ("Star", m1["stars"], m2["stars"]),
-        ("Fork", m1["forks"], m2["forks"]),
-        ("主语言", m1["language"], m2["language"]),
-        ("License", m1["license"], m2["license"]),
-        ("最近推送", m1["pushed"], m2["pushed"]),
-        ("贡献者", m1["contributors"], m2["contributors"]),
-        ("Releases", m1["releases"], m2["releases"]),
-        ("社区健康分", m1["health"] if m1["health"] is not None else "-",
-         m2["health"] if m2["health"] is not None else "-"),
-    ]
-    rows_html = "".join(
-        f"<tr><th>{_esc(k)}</th><td>{_esc(a)}</td><td>{_esc(b)}</td></tr>"
-        for k, a, b in cmp_rows
-    )
+def render_html_compare(ms):
+    title = " vs ".join(m["full"] for m in ms)
+    header_cells = "".join(f"<th>{_esc(m['full'])}</th>" for m in ms)
+    rows_html = ""
+    for label, vals in _compare_rows(ms):
+        cells = "".join(f"<td>{_esc(v)}</td>" for v in vals)
+        rows_html += f"<tr><th>{_esc(label)}</th>{cells}</tr>"
+    detail = ""
+    for m in ms:
+        detail += f"\n<h2>详细报告 · {_esc(m['full'])}</h2>\n{_sections_html(m)}"
     body = f"""
-<h1>{_esc(m1['full'])} vs {_esc(m2['full'])} 对比报告</h1>
+<h1>{_esc(title)} 对比报告</h1>
 <h2>对比总览</h2>
-<table><tr><th>指标</th><th>{_esc(m1['full'])}</th><th>{_esc(m2['full'])}</th></tr>{rows_html}</table>
-
-<h2>详细报告 · {_esc(m1['full'])}</h2>
-{_sections_html(m1)}
-<h2>详细报告 · {_esc(m2['full'])}</h2>
-{_sections_html(m2)}
+<table><tr><th>指标</th>{header_cells}</tr>{rows_html}</table>
+{detail}
 <footer>本报告由 <a href="https://github.com/seanfalling/analyse_github">analyse-github</a> 自动生成。</footer>
 """
-    return _html_page(f"{m1['full']} vs {m2['full']} 对比报告", body)
+    return _html_page(f"{title} 对比报告", body)
 
 
 # ---------------- CLI ----------------
@@ -405,8 +398,8 @@ def main(argv=None):
         prog="analyse-github",
         description="一条命令分析 GitHub 开源项目，生成结构化报告（Markdown / HTML）",
     )
-    parser.add_argument("targets", nargs="*", help="仓库 owner/repo 或完整 URL；--compare 时给两个")
-    parser.add_argument("--compare", action="store_true", help="对比两个仓库")
+    parser.add_argument("targets", nargs="*", help="仓库 owner/repo 或完整 URL；--compare 时给两个及以上")
+    parser.add_argument("--compare", action="store_true", help="横向对比多个仓库（至少两个）")
     parser.add_argument("-o", "--output", help="写入文件（默认输出到 stdout）")
     parser.add_argument("--format", choices=["md", "html"],
                         help="输出格式；默认按 -o 扩展名推断，否则 md")
@@ -415,10 +408,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     if args.compare:
-        if len(args.targets) != 2:
-            parser.error("--compare 需要恰好两个目标，例如：analyse-github --compare openai/whisper facebook/wav2vec2")
+        if len(args.targets) < 2:
+            parser.error("--compare 需要至少两个目标，例如：analyse-github --compare openai/whisper openai/gpt-2")
     elif len(args.targets) != 1:
-        parser.error("请提供一个目标仓库；或加 --compare 后提供两个，例如：analyse-github torvalds/linux")
+        parser.error("请提供一个目标仓库；或加 --compare 后提供至少两个，例如：analyse-github torvalds/linux")
 
     token = args.token or os.environ.get("GITHUB_TOKEN") or None
     try:
@@ -436,7 +429,7 @@ def main(argv=None):
     if args.json:
         text = json.dumps(results if args.compare else results[0], ensure_ascii=False, indent=2)
     elif args.compare:
-        text = render_markdown_compare(*metrics) if fmt == "md" else render_html_compare(*metrics)
+        text = render_markdown_compare(metrics) if fmt == "md" else render_html_compare(metrics)
     else:
         text = render_markdown(metrics[0]) if fmt == "md" else render_html(metrics[0])
 

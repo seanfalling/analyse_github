@@ -37,13 +37,16 @@ jobs:
             exit 1
           fi
           analyse-github "$TARGET" -o report.md
+          analyse-github "$TARGET" -o report.html
 
-      - name: Upload report artifact
+      - name: Upload reports artifact
         uses: actions/upload-artifact@v4
         with:
           name: analyse-report
-          path: report.md
+          path: |
+            report.md
+            report.html
           if-no-files-found: error
 
-      - name: Post report to summary
+      - name: Post markdown report to summary
         run: cat report.md >> "$GITHUB_STEP_SUMMARY"
