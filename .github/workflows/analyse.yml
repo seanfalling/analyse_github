@@ -1,0 +1,49 @@
+name: Analyse GitHub repository
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: '目标仓库（owner/repo 或完整 URL）'
+        required: true
+        type: string
+  schedule:
+    # 每周日 00:00 UTC；需在 Settings → Variables 配置 TARGET_REPO
+    - cron: '0 0 * * 0'
+
+permissions:
+  contents: read
+
+jobs:
+  analyse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install analyse-github
+        run: pip install .
+
+      - name: Run analysis
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ github.event.inputs.repo || vars.TARGET_REPO }}
+        run: |
+          if [ -z "$TARGET" ]; then
+            echo "::error::未提供目标仓库。手动触发时填写 repo 参数；定时触发时请配置变量 TARGET_REPO。"
+            exit 1
+          fi
+          analyse-github "$TARGET" -o report.md
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: analyse-report
+          path: report.md
+          if-no-files-found: error
+
+      - name: Post report to summary
+        run: cat report.md >> "$GITHUB_STEP_SUMMARY"
