@@ -1,12 +1,14 @@
-"""analyse-github — 一条命令分析 GitHub 开源项目，生成结构化 Markdown 报告。
+"""analyse-github — 一条命令分析 GitHub 开源项目，生成结构化报告（Markdown / HTML）。
 
 用法：
-    analyse-github <owner/repo 或 URL> [-o FILE] [--token TOKEN] [--json]
+    analyse-github <owner/repo 或 URL> [-o FILE] [--format md|html] [--token TOKEN] [--json]
+    analyse-github --compare <A> <B> [-o FILE] [--format md|html]
 """
 
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import os
 import re
@@ -21,6 +23,11 @@ _BASE_HEADERS = {
     "X-GitHub-Api-Version": "2022-11-28",
     "User-Agent": "analyse-github",
 }
+
+_FOOTER_MD = "\n".join([
+    "> 本报告由 [analyse-github](https://github.com/seanfalling/analyse_github) 自动生成。",
+    "> 如需结合具体用途评估适用性与替代方案，请把本报告 + 你的用途发给 AI。",
+])
 
 
 class GHError(Exception):
@@ -125,17 +132,12 @@ def _status(repo, days):
     return f"🔴 停更（最近提交 {days} 天前）"
 
 
-def render_markdown(r):
+def _metrics(r):
+    """把 analyze() 的原始结果整理成渲染层需要的展示字段。"""
     repo = r["repo"]
     full = repo.get("full_name", "")
-    url = repo.get("html_url", "")
-    desc = repo.get("description") or "（无描述）"
-    topics = repo.get("topics") or []
-    lic = (repo.get("license") or {}).get("spdx_id") or "无"
-    homepage = repo.get("homepage") or "-"
     pushed = repo.get("pushed_at")
     days = _days_ago(pushed) if pushed else None
-    status = _status(repo, days)
     is_fork = repo.get("fork", False)
 
     langs = r["languages"]
@@ -147,75 +149,249 @@ def render_markdown(r):
 
     community = r["community"] if isinstance(r["community"], dict) else {}
     files = community.get("files") or {}
-    health = community.get("health_percentage")
 
     latest = r["latest_release"]
-    latest_tag = latest.get("tag_name") if latest else "-"
-    latest_date = _fmt_date(latest.get("published_at")) if latest else "-"
 
+    health_files = [
+        (label, bool(files.get(key)))
+        for key, label in [
+            ("readme", "README"),
+            ("license", "LICENSE"),
+            ("contributing", "CONTRIBUTING"),
+            ("code_of_conduct", "CODE_OF_CONDUCT"),
+            ("issue_template", "Issue 模板"),
+            ("pull_request_template", "PR 模板"),
+        ]
+    ]
+
+    return {
+        "full": full,
+        "url": repo.get("html_url", ""),
+        "desc": repo.get("description") or "（无描述）",
+        "topics": repo.get("topics") or [],
+        "license": (repo.get("license") or {}).get("spdx_id") or "无",
+        "homepage": repo.get("homepage") or "-",
+        "pushed": _fmt_date(pushed),
+        "status": _status(repo, days),
+        "is_fork": is_fork,
+        "parent": repo.get("parent", {}).get("full_name", "-") if is_fork else None,
+        "stars": _fmt_num(repo.get("stargazers_count")),
+        "forks": _fmt_num(repo.get("forks_count")),
+        "watchers": _fmt_num(repo.get("subscribers_count")),
+        "language": repo.get("language") or "-",
+        "default_branch": repo.get("default_branch") or "-",
+        "created": _fmt_date(repo.get("created_at")),
+        "updated": _fmt_date(repo.get("updated_at")),
+        "open_issues": _fmt_num(repo.get("open_issues_count")),
+        "contributors": _fmt_num(r["contributors_count"]),
+        "releases": _fmt_num(r["releases_count"]),
+        "latest_tag": latest.get("tag_name") if latest else "-",
+        "latest_date": _fmt_date(latest.get("published_at")) if latest else "-",
+        "health": community.get("health_percentage"),
+        "lang_line": lang_line,
+        "health_files": health_files,
+    }
+
+
+def _overview_rows(m):
+    rows = [
+        ("Star", m["stars"]),
+        ("Fork", m["forks"]),
+        ("Watcher", m["watchers"]),
+        ("主语言", m["language"]),
+        ("License", m["license"]),
+        ("主题标签", " ".join("`" + t + "`" for t in m["topics"]) if m["topics"] else "-"),
+        ("主页", m["homepage"]),
+        ("默认分支", m["default_branch"]),
+        ("创建时间", m["created"]),
+        ("最近推送", m["pushed"]),
+        ("最近更新", m["updated"]),
+    ]
+    if m["is_fork"]:
+        rows.append(("上游仓库", m["parent"]))
+    return rows
+
+
+# ---------------- Markdown ----------------
+
+def _sections_md(m):
+    lines = ["## 1. 项目概览", "", "| 项 | 值 |", "| --- | --- |"]
+    for k, v in _overview_rows(m):
+        lines.append(f"| {k} | {v} |")
+    lines += [
+        "", "## 2. 技术栈与语言构成", "",
+        m["lang_line"], "",
+        "## 3. 质量与维护度", "",
+        f"- 维护状态：{m['status']}",
+        f"- 未关闭 issue（含 PR）：{m['open_issues']}",
+        f"- 贡献者数量：{m['contributors']}",
+        f"- Releases 数量：{m['releases']}（最新 {m['latest_tag']}，{m['latest_date']}）",
+        f"- 社区健康分：{m['health'] if m['health'] is not None else '-'}%",
+        "",
+        "## 4. 仓库健康文件", "",
+        "| 文件 | 是否存在 |", "| --- | --- |",
+    ]
+    for label, ok in m["health_files"]:
+        lines.append(f"| {label} | {'✅' if ok else '❌'} |")
+    return "\n".join(lines)
+
+
+def render_markdown(m):
+    return "\n".join([
+        f"# {m['full']} 分析报告", "",
+        f"**结论（先行）**：{m['status']}", "",
+        f"- 仓库：{m['url']}",
+        f"- 描述：{m['desc']}", "",
+        _sections_md(m), "",
+        "---", "",
+        _FOOTER_MD,
+    ])
+
+
+def render_markdown_compare(m1, m2):
     lines = [
-        f"# {full} 分析报告",
-        "",
-        f"**结论（先行）**：{status}",
-        "",
-        f"- 仓库：{url}",
-        f"- 描述：{desc}",
-        "",
-        "## 1. 项目概览",
-        "",
-        "| 项 | 值 |",
-        "| --- | --- |",
-        f"| Star | {_fmt_num(repo.get('stargazers_count'))} |",
-        f"| Fork | {_fmt_num(repo.get('forks_count'))} |",
-        f"| Watcher | {_fmt_num(repo.get('subscribers_count'))} |",
-        f"| 主语言 | {repo.get('language') or '-'} |",
-        f"| License | {lic} |",
-        f"| 主题标签 | {' '.join('`' + t + '`' for t in topics) if topics else '-'} |",
-        f"| 主页 | {homepage} |",
-        f"| 默认分支 | {repo.get('default_branch') or '-'} |",
-        f"| 创建时间 | {_fmt_date(repo.get('created_at'))} |",
-        f"| 最近推送 | {_fmt_date(pushed)} |",
-        f"| 最近更新 | {_fmt_date(repo.get('updated_at'))} |",
+        f"# {m1['full']} vs {m2['full']} 对比报告", "",
+        "## 对比总览", "",
+        f"| 指标 | {m1['full']} | {m2['full']} |",
+        "| --- | --- | --- |",
     ]
-    if is_fork:
-        lines.append(f"| 上游仓库 | {repo.get('parent', {}).get('full_name', '-')} |")
-    lines += [
-        "",
-        "## 2. 技术栈与语言构成",
-        "",
-        lang_line,
-        "",
-        "## 3. 质量与维护度",
-        "",
-        f"- 维护状态：{status}",
-        f"- 未关闭 issue（含 PR）：{_fmt_num(repo.get('open_issues_count'))}",
-        f"- 贡献者数量：{_fmt_num(r['contributors_count'])}",
-        f"- Releases 数量：{_fmt_num(r['releases_count'])}（最新 {latest_tag}，{latest_date}）",
-        f"- 社区健康分：{health if health is not None else '-'}%",
-        "",
-        "## 4. 仓库健康文件",
-        "",
-        "| 文件 | 是否存在 |",
-        "| --- | --- |",
+    cmp_rows = [
+        ("维护状态", m1["status"], m2["status"]),
+        ("Star", m1["stars"], m2["stars"]),
+        ("Fork", m1["forks"], m2["forks"]),
+        ("主语言", m1["language"], m2["language"]),
+        ("License", m1["license"], m2["license"]),
+        ("最近推送", m1["pushed"], m2["pushed"]),
+        ("贡献者", m1["contributors"], m2["contributors"]),
+        ("Releases", m1["releases"], m2["releases"]),
+        ("社区健康分", m1["health"] if m1["health"] is not None else "-",
+         m2["health"] if m2["health"] is not None else "-"),
     ]
-    for key, label in [
-        ("readme", "README"),
-        ("license", "LICENSE"),
-        ("contributing", "CONTRIBUTING"),
-        ("code_of_conduct", "CODE_OF_CONDUCT"),
-        ("issue_template", "Issue 模板"),
-        ("pull_request_template", "PR 模板"),
-    ]:
-        lines.append(f"| {label} | {'✅' if files.get(key) else '❌'} |")
+    for label, a, b in cmp_rows:
+        lines.append(f"| {label} | {a} | {b} |")
     lines += [
-        "",
-        "---",
-        "",
-        "> 本报告由 [analyse-github](https://github.com/seanfalling/analyse_github) 自动生成。",
-        "> 如需结合具体用途评估适用性与替代方案，请把本报告 + 你的用途发给 AI。",
+        "", "## 详细报告", "",
+        f"### {m1['full']}", "", _sections_md(m1), "",
+        f"### {m2['full']}", "", _sections_md(m2), "",
+        "---", "",
+        _FOOTER_MD,
     ]
     return "\n".join(lines)
 
+
+# ---------------- HTML ----------------
+
+def _esc(s):
+    return html.escape(str(s))
+
+
+_CSS = """
+body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+       max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #24292f; line-height: 1.6; }
+h1 { font-size: 1.7rem; border-bottom: 1px solid #d0d7de; padding-bottom: .5rem; }
+h2 { font-size: 1.3rem; margin-top: 2rem; border-bottom: 1px solid #d0d7de; padding-bottom: .3rem; }
+h3 { font-size: 1.1rem; margin-top: 1.5rem; }
+table { border-collapse: collapse; width: 100%; margin: .8rem 0; }
+th, td { border: 1px solid #d0d7de; padding: .45rem .7rem; text-align: left; font-size: .92rem; }
+th { background: #f6f8fa; }
+.verdict { font-size: 1.1rem; font-weight: 600; margin: .5rem 0 1rem; }
+.ok { color: #1a7f37; } .no { color: #cf222e; }
+.meta { color: #57606a; }
+footer { color: #57606a; font-size: .85rem; margin-top: 2rem;
+         border-top: 1px solid #d0d7de; padding-top: 1rem; }
+"""
+
+
+def _html_page(title, body):
+    return f"""<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{_esc(title)}</title>
+<style>{_CSS}</style>
+</head>
+<body>
+{body}
+</body>
+</html>
+"""
+
+
+def _sections_html(m):
+    rows_html = "".join(
+        f"<tr><th>{_esc(k)}</th><td>{_esc(v)}</td></tr>" for k, v in _overview_rows(m)
+    )
+    health_html = "".join(
+        f"<tr><td>{_esc(label)}</td><td class=\"{'ok' if ok else 'no'}\">{'✅' if ok else '❌'}</td></tr>"
+        for label, ok in m["health_files"]
+    )
+    health = m["health"] if m["health"] is not None else "-"
+    return f"""
+<h2>1. 项目概览</h2>
+<table>{rows_html}</table>
+
+<h2>2. 技术栈与语言构成</h2>
+<p>{_esc(m['lang_line'])}</p>
+
+<h2>3. 质量与维护度</h2>
+<ul>
+<li>维护状态：{_esc(m['status'])}</li>
+<li>未关闭 issue（含 PR）：{_esc(m['open_issues'])}</li>
+<li>贡献者数量：{_esc(m['contributors'])}</li>
+<li>Releases 数量：{_esc(m['releases'])}（最新 {_esc(m['latest_tag'])}，{_esc(m['latest_date'])}）</li>
+<li>社区健康分：{_esc(health)}%</li>
+</ul>
+
+<h2>4. 仓库健康文件</h2>
+<table><tr><th>文件</th><th>是否存在</th></tr>{health_html}</table>
+"""
+
+
+def render_html(m):
+    body = f"""
+<h1>{_esc(m['full'])} 分析报告</h1>
+<p class="verdict">结论（先行）：{_esc(m['status'])}</p>
+<p class="meta">仓库：<a href="{_esc(m['url'])}">{_esc(m['url'])}</a> · {_esc(m['desc'])}</p>
+{_sections_html(m)}
+<footer>本报告由 <a href="https://github.com/seanfalling/analyse_github">analyse-github</a> 自动生成。
+如需结合具体用途评估适用性与替代方案，请把本报告 + 你的用途发给 AI。</footer>
+"""
+    return _html_page(f"{m['full']} 分析报告", body)
+
+
+def render_html_compare(m1, m2):
+    cmp_rows = [
+        ("维护状态", m1["status"], m2["status"]),
+        ("Star", m1["stars"], m2["stars"]),
+        ("Fork", m1["forks"], m2["forks"]),
+        ("主语言", m1["language"], m2["language"]),
+        ("License", m1["license"], m2["license"]),
+        ("最近推送", m1["pushed"], m2["pushed"]),
+        ("贡献者", m1["contributors"], m2["contributors"]),
+        ("Releases", m1["releases"], m2["releases"]),
+        ("社区健康分", m1["health"] if m1["health"] is not None else "-",
+         m2["health"] if m2["health"] is not None else "-"),
+    ]
+    rows_html = "".join(
+        f"<tr><th>{_esc(k)}</th><td>{_esc(a)}</td><td>{_esc(b)}</td></tr>"
+        for k, a, b in cmp_rows
+    )
+    body = f"""
+<h1>{_esc(m1['full'])} vs {_esc(m2['full'])} 对比报告</h1>
+<h2>对比总览</h2>
+<table><tr><th>指标</th><th>{_esc(m1['full'])}</th><th>{_esc(m2['full'])}</th></tr>{rows_html}</table>
+
+<h2>详细报告 · {_esc(m1['full'])}</h2>
+{_sections_html(m1)}
+<h2>详细报告 · {_esc(m2['full'])}</h2>
+{_sections_html(m2)}
+<footer>本报告由 <a href="https://github.com/seanfalling/analyse_github">analyse-github</a> 自动生成。</footer>
+"""
+    return _html_page(f"{m1['full']} vs {m2['full']} 对比报告", body)
+
+
+# ---------------- CLI ----------------
 
 def main(argv=None):
     # Windows 控制台默认 GBK，无法输出 emoji/部分中文，强制 UTF-8
@@ -227,23 +403,42 @@ def main(argv=None):
 
     parser = argparse.ArgumentParser(
         prog="analyse-github",
-        description="一条命令分析 GitHub 开源项目，生成结构化 Markdown 报告",
+        description="一条命令分析 GitHub 开源项目，生成结构化报告（Markdown / HTML）",
     )
-    parser.add_argument("target", help="仓库 owner/repo 或完整 URL，例如 torvalds/linux")
+    parser.add_argument("targets", nargs="*", help="仓库 owner/repo 或完整 URL；--compare 时给两个")
+    parser.add_argument("--compare", action="store_true", help="对比两个仓库")
     parser.add_argument("-o", "--output", help="写入文件（默认输出到 stdout）")
+    parser.add_argument("--format", choices=["md", "html"],
+                        help="输出格式；默认按 -o 扩展名推断，否则 md")
     parser.add_argument("--token", help="GitHub token（默认读 GITHUB_TOKEN 环境变量）")
     parser.add_argument("--json", action="store_true", help="输出原始 JSON")
     args = parser.parse_args(argv)
 
+    if args.compare:
+        if len(args.targets) != 2:
+            parser.error("--compare 需要恰好两个目标，例如：analyse-github --compare openai/whisper facebook/wav2vec2")
+    elif len(args.targets) != 1:
+        parser.error("请提供一个目标仓库；或加 --compare 后提供两个，例如：analyse-github torvalds/linux")
+
     token = args.token or os.environ.get("GITHUB_TOKEN") or None
     try:
-        owner, repo = _parse_target(args.target)
-        result = analyze(owner, repo, token)
+        parsed = [_parse_target(t) for t in args.targets]
+        results = [analyze(o, r, token) for o, r in parsed]
+        metrics = [_metrics(x) for x in results]
     except (GHError, ValueError) as e:
         print(f"✗ {e}", file=sys.stderr)
         return 1
 
-    text = json.dumps(result, ensure_ascii=False, indent=2) if args.json else render_markdown(result)
+    fmt = args.format
+    if fmt is None:
+        fmt = "html" if (args.output and args.output.lower().endswith(".html")) else "md"
+
+    if args.json:
+        text = json.dumps(results if args.compare else results[0], ensure_ascii=False, indent=2)
+    elif args.compare:
+        text = render_markdown_compare(*metrics) if fmt == "md" else render_html_compare(*metrics)
+    else:
+        text = render_markdown(metrics[0]) if fmt == "md" else render_html(metrics[0])
 
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:

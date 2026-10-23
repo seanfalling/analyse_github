@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "analyse-github"
-version = "0.1.0"
+version = "0.2.0"
 description = "一条命令分析 GitHub 开源项目，生成结构化报告"
 readme = "README.md"
 requires-python = ">=3.8"

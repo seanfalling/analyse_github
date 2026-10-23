@@ -33,11 +33,15 @@ cd analyse_github && pip install .
 ```bash
 analyse-github torvalds/linux
 analyse-github https://github.com/ggerganov/llama.cpp
-analyse-github openai/whisper -o report.md      # 写入文件
-analyse-github openai/whisper --json            # 输出原始 JSON
+analyse-github openai/whisper -o report.md        # 写入 Markdown
+analyse-github openai/whisper -o report.html      # 写入 HTML（按扩展名自动识别）
+analyse-github openai/whisper --format html        # 直接输出 HTML 到终端
+analyse-github --compare openai/whisper openai/gpt-2        # 对比两个仓库
+analyse-github --compare A B -o compare.html                  # 对比并输出 HTML
+analyse-github openai/whisper --json              # 输出原始 JSON
 ```
 
-支持 `owner/repo` 或完整 URL。报告包含：
+支持 `owner/repo` 或完整 URL。`-o` 以 `.html` 结尾自动输出 HTML，否则输出 Markdown；也可用 `--format md|html` 显式指定。报告包含：
 
 1. **项目概览** — star/fork/license/主题/时间线/是否 fork/归档
 2. **技术栈与语言构成** — 语言占比
