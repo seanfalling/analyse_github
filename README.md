@@ -1,5 +1,10 @@
 # analyse_github
 
+[![CI](https://github.com/seanfalling/analyse_github/actions/workflows/ci.yml/badge.svg)](https://github.com/seanfalling/analyse_github/actions/workflows/ci.yml)
+[![version](https://img.shields.io/badge/version-0.3.0-blue)](https://github.com/seanfalling/analyse_github/releases)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![stars](https://img.shields.io/github/stars/seanfalling/analyse_github)](https://github.com/seanfalling/analyse_github/stargazers)
+
 一套「分析 GitHub 开源项目」的工具包：**需求模板 + AI Agent 工作流 + 命令行工具 + GitHub Action**。
 
 > 解决痛点：每次分析 GitHub 项目都要重复说明"分析什么、产出什么、装不装要确认"。这个仓库把流程固定下来，还提供了自动出报告的工具。
