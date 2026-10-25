@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import html
 import json
 import os
@@ -96,6 +97,73 @@ def _fmt_num(n):
     return str(n)
 
 
+_HEADING_RE = re.compile(r"^(#{1,3})\s+(\S.*)$")
+_INSTALL_RE = re.compile(
+    r"\b(install(ation|ing)?|setup|build(ing)?|requirements?|dependenc(y|ies)|prerequisites?"
+    r"|clon(e|ing)|quick ?start|getting ?started)\b"
+    r"|安装|部署|下载|依赖|编译|环境准备|快速开始",
+    re.I,
+)
+_USAGE_RE = re.compile(
+    r"\b(usage|use|using|examples?|running|run|commands?|cli|quick ?start|getting ?started)\b"
+    r"|使用|用法|示例|运行|命令|上手|快速开始",
+    re.I,
+)
+
+
+def _cap(text, limit=2000):
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "\n\n…（内容过长，已截断）"
+
+
+def _extract_install_usage(text):
+    """从 README 中抽取「安装」与「使用」两段；找不到则返回 (None, None)。
+
+    按一至三级标题切块（跳过代码围栏内以 # 开头的注释）；三级标题未命中时
+    继承最近二级标题的分类，避免「## Installation 下分 ### Linux/macOS」丢内容。
+    """
+    if not text:
+        return None, None
+    blocks = []
+    cur = None  # [depth, title, body_lines]
+    in_fence = False
+    for line in text.splitlines():
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            if cur is not None:
+                cur[2].append(line)
+            continue
+        m = None if in_fence else _HEADING_RE.match(line)
+        if m:
+            if cur is not None:
+                blocks.append((cur[0], cur[1], "\n".join(cur[2]).strip()))
+            cur = [len(m.group(1)), m.group(2).strip(), []]
+        elif cur is not None:
+            cur[2].append(line)
+    if cur is not None:
+        blocks.append((cur[0], cur[1], "\n".join(cur[2]).strip()))
+
+    install, usage = [], []
+    parent_i = parent_u = False
+    for depth, title, body in blocks:
+        i = bool(_INSTALL_RE.search(title))
+        u = bool(_USAGE_RE.search(title))
+        if depth <= 2:
+            parent_i, parent_u = i, u
+        if not (i or u):
+            i, u = parent_i, parent_u
+        if body:
+            if i:
+                install.append(body)
+            if u:
+                usage.append(body)
+    return (
+        _cap("\n\n".join(install)) if install else None,
+        _cap("\n\n".join(usage)) if usage else None,
+    )
+
+
 def analyze(owner, repo, token):
     data, _ = _get(f"/repos/{owner}/{repo}", token)
     languages, _ = _get(f"/repos/{owner}/{repo}/languages", token)
@@ -106,6 +174,14 @@ def analyze(owner, repo, token):
     except GHError:
         community = {}
 
+    readme_install = readme_usage = None
+    try:
+        readme, _ = _get(f"/repos/{owner}/{repo}/readme", token)
+        readme_md = base64.b64decode(readme.get("content") or "").decode("utf-8", "replace")
+        readme_install, readme_usage = _extract_install_usage(readme_md)
+    except GHError:
+        pass
+
     return {
         "repo": data,
         "languages": languages or {},
@@ -113,6 +189,8 @@ def analyze(owner, repo, token):
         "contributors_count": _last_page(clink) if clink else len(contributors),
         "releases_count": _last_page(rlink) if rlink else len(releases),
         "latest_release": releases[0] if releases else None,
+        "readme_install": readme_install,
+        "readme_usage": readme_usage,
     }
 
 
@@ -190,6 +268,8 @@ def _metrics(r):
         "health": community.get("health_percentage"),
         "lang_line": lang_line,
         "health_files": health_files,
+        "install": r.get("readme_install"),
+        "usage": r.get("readme_usage"),
     }
 
 
@@ -214,6 +294,18 @@ def _overview_rows(m):
 
 # ---------------- Markdown ----------------
 
+def _install_usage_lines(m):
+    inst = m["install"] or "（README 中未找到明确的安装说明）"
+    usage = m["usage"] or "（README 中未找到明确的使用说明）"
+    return [
+        "", "## 5. 安装与使用", "",
+        "**安装方式**", "",
+        inst, "",
+        "**使用方式**", "",
+        usage,
+    ]
+
+
 def _sections_md(m):
     lines = ["## 1. 项目概览", "", "| 项 | 值 |", "| --- | --- |"]
     for k, v in _overview_rows(m):
@@ -233,6 +325,7 @@ def _sections_md(m):
     ]
     for label, ok in m["health_files"]:
         lines.append(f"| {label} | {'✅' if ok else '❌'} |")
+    lines += _install_usage_lines(m)
     return "\n".join(lines)
 
 
@@ -301,6 +394,7 @@ th { background: #f6f8fa; }
 .verdict { font-size: 1.1rem; font-weight: 600; margin: .5rem 0 1rem; }
 .ok { color: #1a7f37; } .no { color: #cf222e; }
 .meta { color: #57606a; }
+pre { background: #f6f8fa; padding: .8rem; overflow-x: auto; border-radius: 6px; }
 footer { color: #57606a; font-size: .85rem; margin-top: 2rem;
          border-top: 1px solid #d0d7de; padding-top: 1rem; }
 """
@@ -319,6 +413,22 @@ def _html_page(title, body):
 {body}
 </body>
 </html>
+"""
+
+
+def _strip_fences(text):
+    return "\n".join(l for l in text.splitlines() if not l.strip().startswith("```"))
+
+
+def _install_usage_html(m):
+    inst = _esc(_strip_fences(m["install"])) if m["install"] else "（README 中未找到明确的安装说明）"
+    usage = _esc(_strip_fences(m["usage"])) if m["usage"] else "（README 中未找到明确的使用说明）"
+    return f"""
+<h2>5. 安装与使用</h2>
+<h3>安装方式</h3>
+<pre>{inst}</pre>
+<h3>使用方式</h3>
+<pre>{usage}</pre>
 """
 
 
@@ -349,6 +459,8 @@ def _sections_html(m):
 
 <h2>4. 仓库健康文件</h2>
 <table><tr><th>文件</th><th>是否存在</th></tr>{health_html}</table>
+
+{_install_usage_html(m)}
 """
 
 
@@ -396,7 +508,7 @@ def main(argv=None):
 
     parser = argparse.ArgumentParser(
         prog="analyse-github",
-        description="一条命令分析 GitHub 开源项目，生成结构化报告（Markdown / HTML）",
+        description="一条命令分析 GitHub 开源项目，生成结构化报告（Markdown / HTML，含安装与使用说明）",
     )
     parser.add_argument("targets", nargs="*", help="仓库 owner/repo 或完整 URL；--compare 时给两个及以上")
     parser.add_argument("--compare", action="store_true", help="横向对比多个仓库（至少两个）")

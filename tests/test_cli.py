@@ -43,6 +43,8 @@ def make_r():
         "contributors_count": 84,
         "releases_count": 13,
         "latest_release": {"tag_name": "v20250625", "published_at": "2025-06-26T00:00:00Z"},
+        "readme_install": None,
+        "readme_usage": None,
     }
 
 
@@ -190,3 +192,79 @@ def test_render_html_compare():
     assert "<h1>openai/whisper vs openai/gpt-2 对比报告</h1>" in out
     assert "<th>openai/whisper</th>" in out
     assert "<th>openai/gpt-2</th>" in out
+
+
+# ---------------- 安装与使用 -------------
+
+def test_extract_install_usage():
+    readme = (
+        "# Foo\n\nA tool.\n\n"
+        "## Installation\n\n```bash\npip install foo\n```\n\n"
+        "## Usage\n\n```bash\nfoo --help\n```\n"
+    )
+    inst, usage = cli._extract_install_usage(readme)
+    assert "pip install foo" in inst
+    assert "foo --help" in usage
+
+
+def test_extract_install_usage_missing():
+    assert cli._extract_install_usage("") == (None, None)
+    assert cli._extract_install_usage("# Foo\n\nNo sections here.") == (None, None)
+
+
+def test_extract_install_usage_variants():
+    readme = (
+        "# Foo\n\n"
+        "## Installing Foo\n\n```bash\npip install foo\n```\n\n"
+        "## Cloning the repository\n\n```bash\ngit clone https://github.com/a/foo\n```\n\n"
+        "## Quick Start\n\n```bash\nfoo run\n```\n"
+    )
+    inst, usage = cli._extract_install_usage(readme)
+    assert "pip install foo" in inst
+    assert "git clone" in inst
+    assert "foo run" in usage
+    assert "foo run" in inst  # Quick Start 同时归入安装
+
+
+def test_extract_install_usage_h3_subsections():
+    readme = (
+        "# Foo\n\n"
+        "## Installation\n\n### Ubuntu\n\n```bash\napt install foo\n```\n\n"
+        "### macOS\n\n```bash\nbrew install foo\n```\n"
+    )
+    inst, usage = cli._extract_install_usage(readme)
+    assert "apt install foo" in inst
+    assert "brew install foo" in inst
+    assert usage is None
+
+
+def test_extract_install_usage_h3_under_generic_h2():
+    readme = (
+        "# Foo\n\n"
+        "## CLI 工具\n\n一条命令。\n\n### 安装\n\n```bash\npip install foo\n```\n\n"
+        "### 使用\n\n```bash\nfoo --help\n```\n"
+    )
+    inst, usage = cli._extract_install_usage(readme)
+    assert "pip install foo" in inst
+    assert "foo --help" in usage
+    assert "pip install foo" not in usage
+
+
+def test_render_markdown_install_usage():
+    r = make_r()
+    r["readme_install"] = "```bash\npip install foo\n```"
+    r["readme_usage"] = "```bash\nfoo run\n```"
+    out = cli.render_markdown(cli._metrics(r))
+    assert "## 5. 安装与使用" in out
+    assert "pip install foo" in out
+    assert "foo run" in out
+
+
+def test_render_html_install_usage():
+    r = make_r()
+    r["readme_install"] = "```bash\npip install foo\n```"
+    r["readme_usage"] = "foo --help"
+    out = cli.render_html(cli._metrics(r))
+    assert "<h2>5. 安装与使用</h2>" in out
+    assert "pip install foo" in out
+    assert "foo --help" in out

@@ -1,7 +1,7 @@
 # analyse_github
 
 [![CI](https://github.com/seanfalling/analyse_github/actions/workflows/ci.yml/badge.svg)](https://github.com/seanfalling/analyse_github/actions/workflows/ci.yml)
-[![version](https://img.shields.io/badge/version-0.3.0-blue)](https://github.com/seanfalling/analyse_github/releases)
+[![version](https://img.shields.io/badge/version-0.4.0-blue)](https://github.com/seanfalling/analyse_github/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![stars](https://img.shields.io/github/stars/seanfalling/analyse_github)](https://github.com/seanfalling/analyse_github/stargazers)
 
@@ -53,6 +53,7 @@ analyse-github openai/whisper --json              # 输出原始 JSON
 2. **技术栈与语言构成** — 语言占比
 3. **质量与维护度** — 维护状态、issue 数、贡献者、releases
 4. **仓库健康文件** — README/LICENSE/CONTRIBUTING 等是否齐全
+5. **安装与使用** — 从目标仓库 README 提取的安装方式与使用说明
 
 > 结论先行：报告顶部直接给出维护活跃度判定（🟢🟡🟠🔴）。
 
@@ -99,7 +100,7 @@ analyse-github owner/repo
 
 A toolkit for analyzing GitHub open-source projects: **prompt template + AI-agent workflow + CLI + GitHub Action**.
 
-- `analyse-github <owner/repo>` — one-command structured Markdown report (stars, license, activity, languages, health files)
+- `analyse-github <owner/repo>` — one-command structured Markdown report (stars, license, activity, languages, health files, install/usage)
 - `.github/workflows/analyse.yml` — scheduled/manual auto-report generation
 - `prompt/analyse-github.md` + `AGENTS.md` — reusable AI workflow
 
